@@ -22,6 +22,20 @@
       "when": 1791396588515,
       "tag": "0002_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791397394685,
+      "tag": "0003_bid_sequence",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791397396280,
+      "tag": "0004_bid_engine",
+      "breakpoints": true
     }
   ]
 }

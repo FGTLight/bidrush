@@ -133,6 +133,11 @@ export const bids = pgTable(
       .notNull()
       .references(() => users.id),
     amount: integer().notNull(),
+    /**
+     * 1, 2, 3… within the auction: the auction's new `bid_count`, assigned
+     * while its row is locked, so it is exactly the order bids were accepted.
+     */
+    seq: integer().notNull(),
     /** `clock_timestamp()`, not `now()`: real order inside one transaction. */
     createdAt: timestamp({ withTimezone: true })
       .notNull()
@@ -143,6 +148,7 @@ export const bids = pgTable(
     // Every accepted bid beats the previous price, so amounts are unique per
     // auction: a second bid at the same price can never be stored.
     uniqueIndex('bids_auction_amount_key').on(t.auctionId, t.amount),
+    uniqueIndex('bids_auction_seq_key').on(t.auctionId, t.seq),
     index('bids_auction_created_idx').on(t.auctionId, t.createdAt.desc()),
     index('bids_user_created_idx').on(t.userId, t.createdAt.desc()),
   ],
