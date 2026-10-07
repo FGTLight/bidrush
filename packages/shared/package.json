@@ -1,0 +1,21 @@
+{
+  "name": "@bidrush/shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Types and zod schemas shared by the BidRush web app and API.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "typescript": "~6.0.2",
+    "vitest": "^5.0.3"
+  }
+}

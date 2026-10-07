@@ -1,0 +1,93 @@
+@import 'tailwindcss';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Design tokens. Tailwind v4 reads its theme from CSS, so this block is the
+ * equivalent of `theme.extend` in a tailwind.config file: every color,
+ * font and animation used by the app is defined here and nowhere else.
+ */
+@theme {
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+
+  /* Brand: electric violet. */
+  --color-brand-50: #f5f3ff;
+  --color-brand-100: #ede9fe;
+  --color-brand-200: #ddd6fe;
+  --color-brand-400: #a78bfa;
+  --color-brand-500: #8b5cf6;
+  --color-brand-600: #7c3aed;
+  --color-brand-700: #6d28d9;
+  --color-brand-900: #4c1d95;
+
+  /* Semantic states of an auction room. */
+  --color-winning: #16a34a;
+  --color-outbid: #e11d48;
+  --color-urgent: #f59e0b;
+  --color-bolt: #fde047;
+
+  /* Surfaces, swapped in dark mode below. */
+  --color-surface: #ffffff;
+  --color-surface-muted: #f4f4f5;
+  --color-canvas: #fafafa;
+  --color-line: #e4e4e7;
+  --color-ink: #18181b;
+  --color-ink-muted: #71717a;
+
+  --animate-pulse-once: pulse-once 600ms ease-out;
+  --animate-shake: shake 400ms ease-in-out;
+}
+
+@layer base {
+  .dark {
+    --color-surface: #18181b;
+    --color-surface-muted: #27272a;
+    --color-canvas: #09090b;
+    --color-line: #3f3f46;
+    --color-ink: #fafafa;
+    --color-ink-muted: #a1a1aa;
+  }
+
+  body {
+    @apply bg-canvas text-ink font-sans antialiased;
+  }
+
+  :focus-visible {
+    @apply outline-2 outline-offset-2 outline-brand-500;
+  }
+}
+
+@keyframes pulse-once {
+  0% {
+    transform: scale(1);
+  }
+  40% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-4px);
+  }
+  75% {
+    transform: translateX(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

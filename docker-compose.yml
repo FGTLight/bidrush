@@ -1,0 +1,94 @@
+# BidRush: everything with one command.
+#
+#   docker compose up --build      →  http://localhost:8080
+#
+# web (nginx :8080) ─┬─► api-1 ─┬─► postgres (source of truth)
+#                    └─► api-2 ─┴─► redis (pub/sub, locks, rate limits)
+#
+# Two API instances on purpose: a bid accepted by one is broadcast to the
+# sockets connected to the other through Redis pub/sub.
+
+x-api-env: &api-env
+  NODE_ENV: production
+  LOG_LEVEL: info
+  DATABASE_URL: postgres://bidrush:bidrush@postgres:5432/bidrush
+  REDIS_URL: redis://redis:6379
+  JWT_SECRET: ${JWT_SECRET:-local-compose-secret-change-me-0123456789}
+  CORS_ORIGINS: http://localhost:8080
+  # Browsers accept Secure cookies on http://localhost.
+  COOKIE_SECURE: 'true'
+
+x-api: &api
+  build:
+    context: .
+    dockerfile: apps/api/Dockerfile
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  healthcheck:
+    test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:3000/health']
+    interval: 5s
+    timeout: 3s
+    retries: 10
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: bidrush
+      POSTGRES_PASSWORD: bidrush
+      POSTGRES_DB: bidrush
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U bidrush -d bidrush']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:8-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '6379:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  api-1:
+    <<: *api
+    environment:
+      <<: *api-env
+      INSTANCE_ID: api-1
+
+  api-2:
+    <<: *api
+    environment:
+      <<: *api-env
+      INSTANCE_ID: api-2
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    ports:
+      - '8080:80'
+    depends_on:
+      api-1:
+        condition: service_healthy
+      api-2:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:

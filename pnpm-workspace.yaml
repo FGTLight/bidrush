@@ -1,0 +1,8 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Native modules that must run their install scripts (prebuilt binaries).
+onlyBuiltDependencies:
+  - '@node-rs/argon2'
+  - esbuild
