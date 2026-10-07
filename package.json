@@ -16,7 +16,8 @@
     "typecheck": "pnpm -r typecheck && tsc -p scripts --noEmit",
     "test": "pnpm -r test",
     "seed": "pnpm --filter @bidrush/api seed",
-    "bots": "tsx scripts/bot-simulator.ts"
+    "bots": "tsx scripts/bot-simulator.ts",
+    "load-test": "tsx scripts/load-test.ts"
   },
   "devDependencies": {
     "@bidrush/shared": "workspace:*",

@@ -22,6 +22,10 @@ x-api-env: &api-env
   AUTH_RATE_LIMIT_PER_MINUTE: '30'
   # The simulator runs every client from one IP; see the README.
   ANTIBOT_IP_PER_MINUTE: ${ANTIBOT_IP_PER_MINUTE:-300}
+  # enforce (default) · monitor (log only; use it for the load test) · off
+  ANTIBOT_MODE: ${ANTIBOT_MODE:-enforce}
+  # Keep a rolling schedule of demo auctions.
+  AUTOPILOT: 'true'
 
 x-api: &api
   build:

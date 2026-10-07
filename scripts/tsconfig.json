@@ -3,5 +3,6 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["*.ts"]
+  "include": ["*.ts", "../apps/api/src/**/*.ts"],
+  "exclude": ["../apps/api/src/**/*.test.ts"]
 }

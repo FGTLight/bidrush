@@ -55,6 +55,11 @@ export const initialRoomState: RoomState = {
 
 export type RoomAction =
   | { type: 'server'; message: ServerMessage; at: number }
+  /**
+   * First paint from REST, before the WebSocket snapshot. Ignored once
+   * anything live has arrived: an HTTP response may be older than events.
+   */
+  | { type: 'initial'; snapshot: AuctionSnapshot }
   | { type: 'bid_sent'; bid: PendingBid }
   | { type: 'dismiss_rejection' }
 
@@ -112,6 +117,8 @@ export function roomReducer(state: RoomState, action: RoomAction): RoomState {
       return { ...state, pending: [...state.pending, action.bid], rejection: null }
     case 'dismiss_rejection':
       return { ...state, rejection: null }
+    case 'initial':
+      return state.auction ? state : applySnapshot(state, action.snapshot)
     case 'server': {
       const m = action.message
       switch (m.type) {

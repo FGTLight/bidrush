@@ -141,6 +141,15 @@ describe('roomReducer', () => {
     expect(state.ended).toEqual({ winner: ada, finalPrice: 110 })
   })
 
+  it('paints from REST first, but never over live data', () => {
+    const rest = { type: 'auction_snapshot' as const, auction, recentBids: [bid(1)], serverTime: 0 }
+    const first = roomReducer(initialRoomState, { type: 'initial', snapshot: rest })
+    expect(first.lastSeq).toBe(1)
+
+    const live = reduce([snapshot([bid(1), bid(2, bob)])])
+    expect(roomReducer(live, { type: 'initial', snapshot: rest })).toBe(live)
+  })
+
   it('marks a missing auction as not found', () => {
     const state = reduce([{ type: 'error', code: 'AUCTION_NOT_FOUND', message: 'Nope' }])
     expect(state.notFound).toBe(true)

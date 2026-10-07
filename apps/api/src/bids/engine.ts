@@ -209,7 +209,8 @@ async function acceptInTransaction(tx: Tx, input: PlaceBidInput): Promise<Accept
       extended: updated.extended,
     },
     outbid: previous,
-    wallet: await getWallet(tx, input.userId),
+    // Filled in after COMMIT: no need to hold the auction's row lock for it.
+    wallet: { available: 0, reserved: 0 },
   }
 }
 
@@ -278,7 +279,7 @@ export async function placeBid(db: Db, input: PlaceBidInput): Promise<PlaceBidRe
         if (!result) throw new Rejection(reject('OUTBID')) // refined below
         return result
       })
-      return accepted
+      return { ...accepted, wallet: await getWallet(db, input.userId) }
     } catch (error) {
       if (error instanceof Rejection) {
         // A concurrent copy of this very bid may have won the race.

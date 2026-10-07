@@ -12,6 +12,26 @@ export default defineConfig({
   resolve: {
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
+  build: {
+    rolldownOptions: {
+      output: {
+        // Libraries change less often than app code: separate, cacheable chunks.
+        codeSplitting: {
+          groups: [
+            {
+              name: 'react',
+              test: /node_modules[\\/](react|react-dom|react-router|scheduler)[\\/]/,
+            },
+            {
+              name: 'motion',
+              test: /node_modules[\\/](motion|framer-motion|motion-dom|motion-utils)[\\/]/,
+            },
+            { name: 'vendor', test: /node_modules/ },
+          ],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     // Same-origin in development, like nginx in Docker: cookies just work.

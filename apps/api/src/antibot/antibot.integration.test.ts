@@ -274,6 +274,12 @@ describe('admin review', () => {
         },
       ],
     })
+    const filtered = await api.app.inject({
+      url: `/admin/risk/users?ids=${admin.body.user.id}`,
+      headers: admin.headers,
+    })
+    expect(filtered.json()).toEqual({ users: [] })
+
     const timeline = await api.app.inject({
       url: `/admin/risk/users/${bot.userId}/events`,
       headers: admin.headers,

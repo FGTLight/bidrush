@@ -1,5 +1,5 @@
 import type { FlaggedUser, RiskEvent } from '@bidrush/shared'
-import { and, desc, eq, isNull } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
 import type { FastifyInstance } from 'fastify'
 import { z } from 'zod'
 
@@ -10,6 +10,14 @@ import { HttpError } from '../errors'
 import type { AntiBotEngine } from './engine'
 
 const idParams = z.object({ id: z.uuid() })
+const listQuery = z.object({
+  /** Only these users (comma-separated ids), e.g. the bot simulator's participants. */
+  ids: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.split(',') : undefined))
+    .pipe(z.array(z.uuid()).max(100).optional()),
+})
 
 /** Admin review of the anti-bot engine's decisions. */
 export async function antibotRoutes(
@@ -19,12 +27,13 @@ export async function antibotRoutes(
   app.addHook('preHandler', requireAdmin)
 
   /** Users the engine flagged and an admin hasn't cleared, riskiest first. */
-  app.get('/admin/risk/users', async (): Promise<{ users: FlaggedUser[] }> => {
+  app.get('/admin/risk/users', async (req): Promise<{ users: FlaggedUser[] }> => {
+    const { ids } = listQuery.parse(req.query)
     const rows = await db
       .select({ risk: userRisk, user: users })
       .from(userRisk)
       .innerJoin(users, eq(users.id, userRisk.userId))
-      .where(isNull(userRisk.clearedAt))
+      .where(and(isNull(userRisk.clearedAt), ids ? inArray(userRisk.userId, ids) : undefined))
       .orderBy(desc(userRisk.score), desc(userRisk.lastEventAt))
       .limit(200)
     return {

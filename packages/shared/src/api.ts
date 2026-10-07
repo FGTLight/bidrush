@@ -127,3 +127,19 @@ export const metricsSnapshot = z.object({
   instanceId: z.string(),
 })
 export type MetricsSnapshot = z.infer<typeof metricsSnapshot>
+
+export const adminMetricsResponse = z.object({
+  serverTime: z.number(),
+  instances: z.array(metricsSnapshot),
+  totals: z.object({
+    bidsPerSecond: z.number(),
+    connectedSockets: z.number().int(),
+    liveAuctions: z.number().int(),
+    /** Worst instance's p95: an upper bound, histograms aren't merged. */
+    p95LatencyMs: z.number(),
+  }),
+})
+export type AdminMetrics = z.infer<typeof adminMetricsResponse>
+
+export const flaggedUsersResponse = z.object({ users: z.array(flaggedUserSchema) })
+export const riskEventsResponse = z.object({ events: z.array(riskEventSchema) })

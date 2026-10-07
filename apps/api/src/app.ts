@@ -11,6 +11,7 @@ import { ZodError } from 'zod'
 
 import { AntiBotEngine } from './antibot/engine'
 import { antibotRoutes } from './antibot/routes'
+import { startAutopilot } from './auctions/autopilot'
 import { Scheduler } from './auctions/lifecycle'
 import { auctionRoutes } from './auctions/routes'
 import { registerAuth } from './auth/plugin'
@@ -19,6 +20,8 @@ import type { Config } from './config'
 import type { Db } from './db/client'
 import { HttpError } from './errors'
 import { meRoutes } from './me/routes'
+import { Metrics } from './metrics/metrics'
+import { metricsRoutes } from './metrics/routes'
 import { Broker } from './realtime/broker'
 import { ConnectionRegistry, realtimeRoutes } from './realtime/ws'
 import type { Redis } from './redis'
@@ -59,6 +62,7 @@ declare module 'fastify' {
       registry: ConnectionRegistry
       scheduler: Scheduler
       antibot: AntiBotEngine
+      metrics: Metrics
     }
   }
 }
@@ -172,17 +176,40 @@ export async function buildApp({ config, db, redis, runScheduler = false }: AppD
   const broker = new Broker(redis, app.log)
   const registry = new ConnectionRegistry()
   const antibot = new AntiBotEngine(redis, db, config.antibot, app.log)
+  const metrics = new Metrics(config.instanceId)
   const scheduler = new Scheduler({ db, redis, broker, antibot, log: app.log })
-  app.decorate('realtime', { broker, registry, scheduler, antibot })
+  app.decorate('realtime', { broker, registry, scheduler, antibot, metrics })
+
+  // Share this instance's numbers with the cluster every 2 s.
+  let metricsTimer: NodeJS.Timeout | null = null
+  let stopAutopilot: (() => void) | null = null
+  const publishMetrics = async () => {
+    const [row] = await db.execute<{ n: string }>(
+      sql`select count(*) as n from auctions where status = 'live'`,
+    )
+    metrics.liveAuctions = Number(row?.n ?? 0)
+    await metrics.publish(redis)
+  }
   await app.register(websocket, { options: { maxPayload: WS_LIMITS.maxMessageBytes } })
-  await app.register(realtimeRoutes, { deps: { config, db, broker, antibot }, registry })
+  await app.register(realtimeRoutes, { deps: { config, db, broker, antibot, metrics }, registry })
+  await app.register(metricsRoutes, { config, metrics, redis })
   await app.register(antibotRoutes, { db, antibot })
 
   app.addHook('onReady', async () => {
     await broker.start()
-    if (runScheduler) scheduler.start()
+    if (runScheduler) {
+      scheduler.start()
+      metricsTimer = setInterval(() => {
+        publishMetrics().catch((err: unknown) => {
+          app.log.warn({ err }, 'metrics publish failed')
+        })
+      }, 2_000)
+      if (config.autopilot) stopAutopilot = startAutopilot({ db, redis, config, log: app.log })
+    }
   })
   app.addHook('onClose', async () => {
+    if (metricsTimer) clearInterval(metricsTimer)
+    stopAutopilot?.()
     await scheduler.stop()
     await antibot.drain()
     await broker.stop()

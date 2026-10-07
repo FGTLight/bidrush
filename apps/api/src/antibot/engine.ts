@@ -38,6 +38,8 @@ const K = {
 }
 
 const HISTORY = 20
+const AUDIT_FLUSH_MS = 250
+const AUDIT_BATCH = 200
 const HOUR_MS = 3_600_000
 
 export interface BidAttempt {
@@ -83,6 +85,9 @@ const toNumbers = (value: unknown) =>
 export class AntiBotEngine {
   /** Audit writes still in flight (they run off the bid's hot path). */
   private readonly pending = new Set<Promise<void>>()
+  /** Decisions waiting to be written in the next batch. */
+  private readonly buffer: { attempt: BidAttempt; evaluation: Evaluation; at: Date }[] = []
+  private flushTimer: NodeJS.Timeout | null = null
 
   constructor(
     private readonly redis: Redis,
@@ -276,28 +281,13 @@ export class AntiBotEngine {
 
   // ---------------------------------------------------------------- audit trail
 
-  /** Records a decision in the background; failures are logged, never thrown. */
-  recordInBackground(attempt: BidAttempt, evaluation: Evaluation) {
-    const task: Promise<void> = this.record(attempt, evaluation)
-      .catch((err: unknown) => {
-        this.log.error({ err }, 'antibot record failed')
-      })
-      .finally(() => {
-        this.pending.delete(task)
-      })
-    this.pending.add(task)
-  }
-
-  /** Waits for in-flight audit writes (graceful shutdown, tests). */
-  async drain() {
-    await Promise.all([...this.pending])
-  }
-
   /**
-   * Logs every decision and stores the meaningful ones. Repeated blocks
-   * within the window block the account itself (also recorded).
+   * Logs the decision now and queues it for storage. Writes are batched
+   * (every 250 ms, or 200 decisions) into one multi-row INSERT: under a bot
+   * attack every bid is flagged, and one write per bid would compete with
+   * the bids themselves for database connections.
    */
-  async record(attempt: BidAttempt, evaluation: Evaluation) {
+  recordInBackground(attempt: BidAttempt, evaluation: Evaluation) {
     const { level, score, signals } = evaluation
     const entry = {
       userId: attempt.userId,
@@ -315,33 +305,110 @@ export class AntiBotEngine {
       this.log.warn(entry, 'antibot decision')
     }
 
-    await this.db.insert(riskEvents).values({
+    this.buffer.push({ attempt, evaluation, at: new Date() })
+    if (this.buffer.length >= AUDIT_BATCH) this.flushSoon(0)
+    else this.flushSoon(AUDIT_FLUSH_MS)
+  }
+
+  private flushSoon(delayMs: number) {
+    if (this.flushTimer && delayMs > 0) return
+    if (this.flushTimer) clearTimeout(this.flushTimer)
+    this.flushTimer = setTimeout(() => {
+      this.flushTimer = null
+      const task: Promise<void> = this.flush()
+        .catch((err: unknown) => {
+          this.log.error({ err }, 'antibot audit flush failed')
+        })
+        .finally(() => {
+          this.pending.delete(task)
+        })
+      this.pending.add(task)
+    }, delayMs)
+  }
+
+  /** Waits for queued and in-flight audit writes (graceful shutdown, tests). */
+  async drain() {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer)
+      this.flushTimer = null
+      await this.flush()
+    }
+    await Promise.all([...this.pending])
+  }
+
+  private async flush() {
+    const batch = this.buffer.splice(0)
+    if (batch.length === 0) return
+
+    const rows = batch.map(({ attempt, evaluation, at }) => ({
       userId: attempt.userId,
       auctionId: attempt.auctionId,
       bidId: attempt.bidId,
-      score: entry.score,
-      level,
-      signals: signals.map(({ name, score: s, reason }) => ({
+      score: Number(evaluation.score.toFixed(3)),
+      level: evaluation.level,
+      signals: evaluation.signals.map(({ name, score, reason }) => ({
         name,
-        score: Number(s.toFixed(3)),
+        score: Number(score.toFixed(3)),
         reason,
       })),
       ip: attempt.ip,
       fingerprint: evaluation.fingerprint,
+      createdAt: at,
+    }))
+    try {
+      await this.db.insert(riskEvents).values(rows)
+    } catch (err) {
+      // One bad row (e.g. a user deleted meanwhile) must not lose the batch.
+      this.log.warn({ err }, 'audit batch failed; retrying row by row')
+      for (const row of rows) {
+        await this.db
+          .insert(riskEvents)
+          .values(row)
+          .catch((rowErr: unknown) => {
+            this.log.error({ err: rowErr, userId: row.userId }, 'audit row dropped')
+          })
+      }
+    }
+
+    // Latest flagged decision per user (a batch can hold many per bot).
+    const latest = new Map<string, (typeof batch)[number]>()
+    for (const item of batch) {
+      if (item.evaluation.level !== 'allow') latest.set(item.attempt.userId, item)
+    }
+    if (latest.size === 0) return
+    const upsert = (items: (typeof batch)[number][]) =>
+      this.db
+        .insert(userRisk)
+        .values(
+          items.map(({ attempt, evaluation, at }) => ({
+            userId: attempt.userId,
+            score: Number(evaluation.score.toFixed(3)),
+            level: evaluation.level,
+            topReasons: evaluation.signals.slice(0, 3).map((s) => s.reason),
+            lastEventAt: at,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: userRisk.userId,
+          set: {
+            score: sql`excluded.score`,
+            level: sql`excluded.level`,
+            topReasons: sql`excluded.top_reasons`,
+            lastEventAt: sql`excluded.last_event_at`,
+            clearedAt: null,
+          },
+        })
+    await upsert([...latest.values()]).catch(async (err: unknown) => {
+      this.log.warn({ err }, 'user risk batch failed; retrying one by one')
+      for (const item of latest.values()) {
+        await upsert([item]).catch(() => undefined)
+      }
     })
-    if (level === 'allow') return
 
-    const lastEventAt = new Date()
-    const topReasons = signals.slice(0, 3).map((s) => s.reason)
-    await this.db
-      .insert(userRisk)
-      .values({ userId: attempt.userId, score: entry.score, level, topReasons, lastEventAt })
-      .onConflictDoUpdate({
-        target: userRisk.userId,
-        set: { score: entry.score, level, topReasons, lastEventAt, clearedAt: null },
-      })
-
-    if (level === 'block' && this.config.mode === 'enforce') await this.maybeAutoBlock(attempt)
+    if (this.config.mode !== 'enforce') return
+    for (const { attempt, evaluation } of latest.values()) {
+      if (evaluation.level === 'block') await this.maybeAutoBlock(attempt)
+    }
   }
 
   private async maybeAutoBlock(attempt: BidAttempt) {

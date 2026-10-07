@@ -12,6 +12,7 @@ const AuctionRoomPage = lazy(() => import('@/features/auction/AuctionRoomPage'))
 const MyBidsPage = lazy(() =>
   import('@/features/me/MePages').then((m) => ({ default: m.MyBidsPage })),
 )
+const AdminPage = lazy(() => import('@/features/admin/AdminPage'))
 const WalletPage = lazy(() =>
   import('@/features/me/MePages').then((m) => ({ default: m.WalletPage })),
 )
@@ -41,6 +42,7 @@ export function App() {
           <Route path="sign-up" element={<SignUpPage />} />
           <Route path="me/bids" element={<MyBidsPage />} />
           <Route path="wallet" element={<WalletPage />} />
+          <Route path="admin" element={<AdminPage />} />
           <Route path="*" element={<NotFound />} />
         </Route>
       </Routes>

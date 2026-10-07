@@ -22,6 +22,7 @@ import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from 'fastify
 import type { WebSocket } from 'ws'
 
 import type { AntiBotEngine, BidAttempt } from '../antibot/engine'
+import type { Metrics } from '../metrics/metrics'
 import type { AuthContext } from '../auth/sessions'
 import { isAllowedOrigin } from '../auth/plugin'
 import { getAuction, recentBids } from '../auctions/views'
@@ -40,6 +41,7 @@ export interface RealtimeDeps {
   db: Db
   broker: Broker
   antibot: AntiBotEngine
+  metrics: Metrics
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -58,6 +60,12 @@ class Connection {
   private readonly bucket = new TokenBucket(10, 20)
   /** Messages are processed one after another. */
   private queue: Promise<void> = Promise.resolve()
+  /**
+   * Arrival time of bids being processed, to measure latency at the ack.
+   * A throttled bid's deliberate delay is added here, so the metric measures
+   * the system, not the anti-bot penalty.
+   */
+  private readonly inFlight = new Map<string, number>()
   alive = true
   signals: BrowserSignals | null = null
 
@@ -70,6 +78,13 @@ class Connection {
   ) {}
 
   send(message: ServerMessage) {
+    if (message.type === 'bid_ack') {
+      const receivedAt = this.inFlight.get(message.bidId)
+      if (receivedAt !== undefined) {
+        this.inFlight.delete(message.bidId)
+        this.deps.metrics.recordBid(Date.now() - receivedAt, message.status === 'accepted')
+      }
+    }
     this.sendRaw(JSON.stringify(message))
   }
 
@@ -159,7 +174,13 @@ class Connection {
         this.subscriptions.delete(message.auctionId)
         return
       case 'bid':
-        return this.bid(message, receivedAt)
+        this.inFlight.set(message.bidId, receivedAt)
+        try {
+          await this.bid(message, receivedAt)
+        } finally {
+          this.inFlight.delete(message.bidId)
+        }
+        return
     }
   }
 
@@ -333,10 +354,13 @@ class Connection {
         this.send(await antibot.issueChallenge(auth.userId))
         this.rejectBid(message.bidId, 'CHALLENGE_REQUIRED')
         return 'stop'
-      case 'throttle':
+      case 'throttle': {
         // A late bid loses races to humans; that's the point.
+        const arrived = this.inFlight.get(message.bidId)
+        if (arrived !== undefined) this.inFlight.set(message.bidId, arrived + evaluation.delayMs)
         await sleep(evaluation.delayMs)
         return 'go'
+      }
       case 'allow':
         return 'go'
     }
@@ -371,6 +395,7 @@ export async function realtimeRoutes(
   app.get(WS_PATH, { websocket: true, preValidation: checkOrigin }, (socket, req) => {
     const connection = new Connection(socket, req.auth, req.ip, deps, req.log)
     registry.connections.add(connection)
+    deps.metrics.connectedSockets = registry.size
 
     // Listeners first (synchronously), so no early message is lost.
     socket.on('message', (data, isBinary) => {
@@ -385,6 +410,7 @@ export async function realtimeRoutes(
     })
     socket.on('close', () => {
       registry.connections.delete(connection)
+      deps.metrics.connectedSockets = registry.size
       void connection.close()
     })
     socket.on('error', (err) => {

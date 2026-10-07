@@ -366,7 +366,12 @@ async function main() {
   for (const c of clients) c.stop()
   await new Promise((r) => setTimeout(r, 1_500)) // let the audit writes land
 
-  const { users } = await adminRequest<{ users: FlaggedUser[] }>(admin, '/admin/risk/users')
+  // Only this run's participants: other flagged users must not crowd them out.
+  const ids = clients.map((c) => c.session.userId).join(',')
+  const { users } = await adminRequest<{ users: FlaggedUser[] }>(
+    admin,
+    `/admin/risk/users?ids=${ids}`,
+  )
   const verdicts = new Map(users.map((u) => [u.user.id, u]))
 
   const rows = [['participant', 'really', 'accepted', 'rejected', 'engine verdict', 'top reason']]

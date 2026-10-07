@@ -24,6 +24,10 @@ const envSchema = z
 
     DATABASE_URL: z.url().default('postgres://bidrush:bidrush@localhost:5432/bidrush'),
     REDIS_URL: z.url().default('redis://localhost:6379'),
+    /** When set, GET /metrics requires `Authorization: Bearer <token>`. */
+    METRICS_TOKEN: z.string().min(16).optional(),
+    /** Keep a rolling schedule of demo auctions so the site always has some live. */
+    AUTOPILOT: bool.default(false),
     /** Apply pending migrations at startup (advisory-locked). */
     RUN_MIGRATIONS: bool.default(true),
 
@@ -96,6 +100,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     databaseUrl: e.DATABASE_URL,
     redisUrl: e.REDIS_URL,
     runMigrations: e.RUN_MIGRATIONS,
+    metricsToken: e.METRICS_TOKEN,
+    autopilot: e.AUTOPILOT,
     jwtSecret: e.JWT_SECRET,
     corsOrigins: e.CORS_ORIGINS,
     cookie: { secure: e.COOKIE_SECURE, crossSite: e.COOKIE_CROSS_SITE },

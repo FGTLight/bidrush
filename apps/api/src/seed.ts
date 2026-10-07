@@ -1,8 +1,12 @@
 /**
  * `pnpm seed`: demo data. Idempotent: run it as often as you like.
  *
- * Creates the admin account (ADMIN_EMAIL / ADMIN_PASSWORD) used by the
- * dashboard and the bot simulator.
+ * - Admin account (ADMIN_EMAIL / ADMIN_PASSWORD): dashboard and simulator.
+ * - Three demo bidders with credits, to try the app in several tabs.
+ * Live auctions come from the API's autopilot (AUTOPILOT=true), which keeps
+ * a rolling schedule so there is always something to bid on.
+ *
+ * Passwords are reset to the values below on every run: demo accounts only.
  */
 import { eq } from 'drizzle-orm'
 
@@ -15,27 +19,57 @@ import { grantCredits, openAccounts } from './ledger/ledger'
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? 'admin@bidrush.dev'
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'bidrush-admin-demo'
+const DEMO_PASSWORD = 'bidrush-demo'
+
+const accounts = [
+  {
+    email: ADMIN_EMAIL,
+    displayName: 'Admin',
+    role: 'admin' as const,
+    password: ADMIN_PASSWORD,
+    credits: 10_000,
+  },
+  ...['Alice', 'Bob', 'Carol'].map((name) => ({
+    email: `${name.toLowerCase()}@bidrush.dev`,
+    displayName: name,
+    role: 'user' as const,
+    password: DEMO_PASSWORD,
+    credits: 5_000,
+  })),
+]
 
 const config = loadConfig()
 await runMigrations(config.databaseUrl)
 const { db, close } = createDb(config.databaseUrl, { max: 2 })
 
-const [existing] = await db.select().from(users).where(eq(users.email, ADMIN_EMAIL))
-if (existing) {
-  await db.update(users).set({ role: 'admin', blockedAt: null }).where(eq(users.id, existing.id))
-  console.log(`admin ${ADMIN_EMAIL} already exists (role ensured)`)
-} else {
-  const passwordHash = await hashPassword(ADMIN_PASSWORD)
+for (const account of accounts) {
+  const passwordHash = await hashPassword(account.password)
+  const [existing] = await db.select().from(users).where(eq(users.email, account.email))
+  if (existing) {
+    await db
+      .update(users)
+      .set({ passwordHash, role: account.role, blockedAt: null })
+      .where(eq(users.id, existing.id))
+    console.log(`updated  ${account.email}`)
+    continue
+  }
   await db.transaction(async (tx) => {
-    const [admin] = await tx
+    const [user] = await tx
       .insert(users)
-      .values({ email: ADMIN_EMAIL, passwordHash, displayName: 'Admin', role: 'admin' })
+      .values({
+        email: account.email,
+        passwordHash,
+        displayName: account.displayName,
+        role: account.role,
+      })
       .returning()
-    if (!admin) throw new Error('admin not created')
-    await openAccounts(tx, admin.id)
-    await grantCredits(tx, admin.id, 10_000, 'Admin demo credits')
+    if (!user) throw new Error('user not created')
+    await openAccounts(tx, user.id)
+    await grantCredits(tx, user.id, account.credits, 'Demo credits')
   })
-  console.log(`admin ${ADMIN_EMAIL} created`)
+  console.log(`created  ${account.email}`)
 }
 
+console.log(`\nadmin: ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`)
+console.log(`demo bidders: alice@, bob@, carol@bidrush.dev / ${DEMO_PASSWORD}`)
 await close()
