@@ -3,10 +3,12 @@ import { randomUUID } from 'node:crypto'
 import cors from '@fastify/cors'
 import helmet from '@fastify/helmet'
 import type { ApiError } from '@bidrush/shared'
+import { sql } from 'drizzle-orm'
 import Fastify, { type FastifyServerOptions } from 'fastify'
 import { ZodError } from 'zod'
 
 import type { Config } from './config'
+import type { Db } from './db/client'
 
 /** Thrown by handlers for expected failures (404, 409...). */
 export class HttpError extends Error {
@@ -32,11 +34,17 @@ function loggerOptions(config: Config): FastifyServerOptions['logger'] {
   }
 }
 
+/** Everything the app needs from the outside world, injected for tests. */
+export interface AppDeps {
+  config: Config
+  db: Db
+}
+
 /**
  * Builds the Fastify app without listening, so tests can drive it with
  * `app.inject()`. `server.ts` adds the network side.
  */
-export async function buildApp(config: Config) {
+export async function buildApp({ config, db }: AppDeps) {
   const startedAt = Date.now()
   const app = Fastify({
     logger: loggerOptions(config),
@@ -98,11 +106,20 @@ export async function buildApp(config: Config) {
     reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Route not found.' } }),
   )
 
-  app.get('/health', async () => ({
-    status: 'ok',
-    instance: config.instanceId,
-    uptimeMs: Date.now() - startedAt,
-  }))
+  // Liveness plus dependency checks; 503 takes the instance out of rotation.
+  app.get('/health', async (_req, reply) => {
+    const postgres = await db
+      .execute(sql`select 1`)
+      .then(() => 'up' as const)
+      .catch(() => 'down' as const)
+    const ok = postgres === 'up'
+    return reply.status(ok ? 200 : 503).send({
+      status: ok ? 'ok' : 'degraded',
+      instance: config.instanceId,
+      uptimeMs: Date.now() - startedAt,
+      checks: { postgres },
+    })
+  })
 
   return app
 }

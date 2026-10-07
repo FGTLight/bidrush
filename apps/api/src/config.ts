@@ -20,6 +20,8 @@ const envSchema = z
 
     DATABASE_URL: z.url().default('postgres://bidrush:bidrush@localhost:5432/bidrush'),
     REDIS_URL: z.url().default('redis://localhost:6379'),
+    /** Apply pending migrations at startup (advisory-locked). */
+    RUN_MIGRATIONS: bool.default(true),
 
     JWT_SECRET: z.string().min(32).default(DEV_JWT_SECRET),
     /** Comma-separated origins allowed to call the API with cookies. */
@@ -78,6 +80,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     instanceId: e.INSTANCE_ID,
     databaseUrl: e.DATABASE_URL,
     redisUrl: e.REDIS_URL,
+    runMigrations: e.RUN_MIGRATIONS,
     jwtSecret: e.JWT_SECRET,
     corsOrigins: e.CORS_ORIGINS,
     cookie: { secure: e.COOKIE_SECURE, crossSite: e.COOKIE_CROSS_SITE },

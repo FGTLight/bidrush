@@ -1,10 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 
+import { useTestDb } from '../test/db'
 import { buildApp } from './app'
 import { loadConfig } from './config'
+import { createDb } from './db/client'
 
 const config = loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'silent' })
-const app = await buildApp(config)
+const { db } = useTestDb()
+const app = await buildApp({ config, db })
 
 beforeAll(() => app.ready())
 afterAll(() => app.close())
@@ -13,8 +16,22 @@ describe('app', () => {
   it('reports health with a request id', async () => {
     const res = await app.inject({ method: 'GET', url: '/health' })
     expect(res.statusCode).toBe(200)
-    expect(res.json()).toMatchObject({ status: 'ok', instance: config.instanceId })
+    expect(res.json()).toMatchObject({
+      status: 'ok',
+      instance: config.instanceId,
+      checks: { postgres: 'up' },
+    })
     expect(res.headers['x-request-id']).toMatch(/^[\w-]+$/)
+  })
+
+  it('reports 503 when Postgres is unreachable', async () => {
+    const broken = createDb('postgres://nobody:wrong@127.0.0.1:1/none', { max: 1 })
+    const degraded = await buildApp({ config, db: broken.db })
+    const res = await degraded.inject({ url: '/health' })
+    expect(res.statusCode).toBe(503)
+    expect(res.json()).toMatchObject({ status: 'degraded', checks: { postgres: 'down' } })
+    await degraded.close()
+    await broken.close()
   })
 
   it('keeps a valid upstream request id', async () => {

@@ -64,11 +64,14 @@ export const walletSchema = z.object({
 export type Wallet = z.infer<typeof walletSchema>
 
 export const ledgerEntryKinds = ['grant', 'reserve', 'release', 'settle'] as const
+/** One ledger transaction, as it affected the user's two accounts. */
 export const ledgerEntrySchema = z.object({
   id: z.string(),
   kind: z.enum(ledgerEntryKinds),
-  /** Positive adds to available, negative removes from it. */
-  amount: z.number().int(),
+  /** Change to the available balance (negative when credits leave it). */
+  available: z.number().int(),
+  /** Change to the reserved balance. */
+  reserved: z.number().int(),
   auctionId: z.uuid().nullable(),
   auctionTitle: z.string().nullable(),
   createdAt: isoDate,
