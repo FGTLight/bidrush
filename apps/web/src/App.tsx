@@ -1,48 +1,49 @@
-import { useQuery } from '@tanstack/react-query'
-import { Route, Routes } from 'react-router'
-import { z } from 'zod'
+import { lazy, Suspense } from 'react'
+import { Link, Route, Routes } from 'react-router'
 
-import { request } from '@/lib/api'
+import { AppLayout } from '@/components/layout/AppLayout'
+import { EmptyState, Skeleton } from '@/components/ui'
+import { buttonClass } from '@/components/ui/styles'
+import { SignInPage, SignUpPage } from '@/features/auth/AuthPages'
+import LandingPage from '@/pages/LandingPage'
 
-const healthSchema = z.object({ status: z.literal('ok'), instance: z.string() })
+const AuctionsPage = lazy(() => import('@/features/lobby/AuctionsPage'))
+const AuctionRoomPage = lazy(() => import('@/features/auction/AuctionRoomPage'))
+const MyBidsPage = lazy(() =>
+  import('@/features/me/MePages').then((m) => ({ default: m.MyBidsPage })),
+)
+const WalletPage = lazy(() =>
+  import('@/features/me/MePages').then((m) => ({ default: m.WalletPage })),
+)
 
-/** Temporary landing page until the auction pages exist (step 6). */
-function Landing() {
-  const health = useQuery({
-    queryKey: ['health'],
-    queryFn: ({ signal }) => request('/health', { schema: healthSchema, signal }),
-    retry: false,
-  })
-
+function NotFound() {
   return (
-    <main className="mx-auto flex min-h-dvh max-w-2xl flex-col justify-center gap-6 px-6">
-      <p className="font-mono text-sm font-bold uppercase tracking-widest text-brand-600">
-        60 seconds · one winner
-      </p>
-      <h1 className="text-5xl font-extrabold tracking-tight">
-        Bid<span className="text-brand-600">Rush</span>
-      </h1>
-      <p className="text-lg text-ink-muted">
-        Real-time express auctions. The server decides every bid in milliseconds.
-      </p>
-      <p role="status" className="font-mono text-sm">
-        API:{' '}
-        {health.isPending ? (
-          'checking…'
-        ) : health.isSuccess ? (
-          <span className="text-winning">online ({health.data.instance})</span>
-        ) : (
-          <span className="text-outbid">offline</span>
-        )}
-      </p>
-    </main>
+    <EmptyState
+      title="Page not found"
+      action={
+        <Link to="/auctions" className={buttonClass()}>
+          See live auctions
+        </Link>
+      }
+    />
   )
 }
 
 export function App() {
   return (
-    <Routes>
-      <Route path="*" element={<Landing />} />
-    </Routes>
+    <Suspense fallback={<Skeleton className="m-8 h-64" />}>
+      <Routes>
+        <Route element={<AppLayout />}>
+          <Route index element={<LandingPage />} />
+          <Route path="auctions" element={<AuctionsPage />} />
+          <Route path="auctions/:id" element={<AuctionRoomPage />} />
+          <Route path="sign-in" element={<SignInPage />} />
+          <Route path="sign-up" element={<SignUpPage />} />
+          <Route path="me/bids" element={<MyBidsPage />} />
+          <Route path="wallet" element={<WalletPage />} />
+          <Route path="*" element={<NotFound />} />
+        </Route>
+      </Routes>
+    </Suspense>
   )
 }

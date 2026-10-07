@@ -16,6 +16,7 @@ import { authRoutes } from './auth/routes'
 import type { Config } from './config'
 import type { Db } from './db/client'
 import { HttpError } from './errors'
+import { meRoutes } from './me/routes'
 import { Broker } from './realtime/broker'
 import { ConnectionRegistry, realtimeRoutes } from './realtime/ws'
 import type { Redis } from './redis'
@@ -158,6 +159,7 @@ export async function buildApp({ config, db, redis, runScheduler = false }: AppD
   await registerAuth(app, { config, db })
   await app.register(authRoutes, { config, db, redis })
   await app.register(auctionRoutes, { config, db })
+  await app.register(meRoutes, { db })
 
   // Realtime: WebSockets fed by Redis pub/sub, and the auction lifecycle.
   const broker = new Broker(redis, app.log)
