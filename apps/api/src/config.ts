@@ -12,6 +12,8 @@ const envSchema = z
     NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
     HOST: z.string().default('0.0.0.0'),
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+    /** Reverse proxies in front of the API (nginx = 1); 0 when exposed directly. */
+    TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(1),
     LOG_LEVEL: z
       .enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent'])
       .default('info'),
@@ -38,6 +40,16 @@ const envSchema = z
     COOKIE_SECURE: bool.default(false),
     /** `SameSite=None` when the web app is on another site (e.g. Vercel + Railway). */
     COOKIE_CROSS_SITE: bool.default(false),
+    SESSION_TTL_HOURS: z.coerce
+      .number()
+      .int()
+      .min(1)
+      .max(24 * 90)
+      .default(24 * 7),
+    /** Demo credits every new account starts with. */
+    SIGNUP_CREDITS: z.coerce.number().int().min(0).default(1_000),
+    /** Sign-in / sign-up attempts per IP per minute. */
+    AUTH_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).default(10),
 
     AUCTION_DURATION_MS: z.coerce.number().int().min(5_000).default(AUCTION_DEFAULTS.durationMs),
     SOFT_CLOSE_WINDOW_MS: z.coerce
@@ -77,6 +89,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     host: e.HOST,
     port: e.PORT,
     logLevel: e.LOG_LEVEL,
+    trustProxyHops: e.TRUST_PROXY_HOPS,
     instanceId: e.INSTANCE_ID,
     databaseUrl: e.DATABASE_URL,
     redisUrl: e.REDIS_URL,
@@ -84,6 +97,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
     jwtSecret: e.JWT_SECRET,
     corsOrigins: e.CORS_ORIGINS,
     cookie: { secure: e.COOKIE_SECURE, crossSite: e.COOKIE_CROSS_SITE },
+    auth: {
+      sessionTtlMs: e.SESSION_TTL_HOURS * 3_600_000,
+      signupCredits: e.SIGNUP_CREDITS,
+      rateLimitPerMinute: e.AUTH_RATE_LIMIT_PER_MINUTE,
+    },
     auction: {
       durationMs: e.AUCTION_DURATION_MS,
       softCloseWindowMs: e.SOFT_CLOSE_WINDOW_MS,

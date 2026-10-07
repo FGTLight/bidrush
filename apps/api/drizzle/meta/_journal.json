@@ -15,6 +15,13 @@
       "when": 1791396215694,
       "tag": "0001_ledger_invariants",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791396588515,
+      "tag": "0002_sessions",
+      "breakpoints": true
     }
   ]
 }

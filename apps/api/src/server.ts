@@ -2,6 +2,7 @@ import { buildApp } from './app'
 import { loadConfig } from './config'
 import { createDb } from './db/client'
 import { runMigrations } from './db/migrate'
+import { createRedis } from './redis'
 
 const config = loadConfig()
 
@@ -9,7 +10,9 @@ const config = loadConfig()
 if (config.runMigrations) await runMigrations(config.databaseUrl)
 
 const database = createDb(config.databaseUrl)
-const app = await buildApp({ config, db: database.db })
+const redis = createRedis(config.redisUrl)
+await redis.connect()
+const app = await buildApp({ config, db: database.db, redis: redis.redis })
 
 // Graceful shutdown: stop accepting work, let in-flight requests finish.
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
@@ -17,7 +20,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     app.log.info({ signal }, 'shutting down')
     app
       .close()
-      .then(() => database.close())
+      .then(() => Promise.all([database.close(), redis.close()]))
       .then(
         () => process.exit(0),
         (err: unknown) => {

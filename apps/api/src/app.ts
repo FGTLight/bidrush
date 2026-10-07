@@ -2,24 +2,20 @@ import { randomUUID } from 'node:crypto'
 
 import cors from '@fastify/cors'
 import helmet from '@fastify/helmet'
+import rateLimit from '@fastify/rate-limit'
 import type { ApiError } from '@bidrush/shared'
 import { sql } from 'drizzle-orm'
 import Fastify, { type FastifyServerOptions } from 'fastify'
 import { ZodError } from 'zod'
 
+import { registerAuth } from './auth/plugin'
+import { authRoutes } from './auth/routes'
 import type { Config } from './config'
 import type { Db } from './db/client'
+import { HttpError } from './errors'
+import type { Redis } from './redis'
 
-/** Thrown by handlers for expected failures (404, 409...). */
-export class HttpError extends Error {
-  constructor(
-    readonly statusCode: number,
-    readonly code: string,
-    message: string,
-  ) {
-    super(message)
-  }
-}
+export { HttpError }
 
 function loggerOptions(config: Config): FastifyServerOptions['logger'] {
   if (config.logLevel === 'silent') return false
@@ -27,7 +23,12 @@ function loggerOptions(config: Config): FastifyServerOptions['logger'] {
     level: config.logLevel,
     base: { instance: config.instanceId },
     // Never log credentials or session cookies.
-    redact: ['req.headers.cookie', 'req.headers.authorization', 'res.headers["set-cookie"]'],
+    redact: [
+      'req.headers.cookie',
+      'req.headers.authorization',
+      'req.headers["x-csrf-token"]',
+      'res.headers["set-cookie"]',
+    ],
     ...(config.env === 'development' && {
       transport: { target: 'pino-pretty', options: { translateTime: 'HH:MM:ss.l' } },
     }),
@@ -38,13 +39,14 @@ function loggerOptions(config: Config): FastifyServerOptions['logger'] {
 export interface AppDeps {
   config: Config
   db: Db
+  redis: Redis
 }
 
 /**
  * Builds the Fastify app without listening, so tests can drive it with
  * `app.inject()`. `server.ts` adds the network side.
  */
-export async function buildApp({ config, db }: AppDeps) {
+export async function buildApp({ config, db, redis }: AppDeps) {
   const startedAt = Date.now()
   const app = Fastify({
     logger: loggerOptions(config),
@@ -55,7 +57,9 @@ export async function buildApp({ config, db }: AppDeps) {
     },
     requestIdLogLabel: 'requestId',
     bodyLimit: 64 * 1024,
-    trustProxy: true,
+    // Trust exactly the proxies in front of us (nginx): the client IP is the
+    // address they saw, not whatever X-Forwarded-For the client claims.
+    trustProxy: (_address: string, hop: number) => hop < config.trustProxyHops,
   })
 
   await app.register(helmet, {
@@ -67,6 +71,17 @@ export async function buildApp({ config, db }: AppDeps) {
     credentials: true,
     methods: ['GET', 'POST', 'PATCH', 'DELETE'],
     allowedHeaders: ['content-type', 'x-csrf-token', 'x-request-id'],
+  })
+  await app.register(rateLimit, {
+    // Opt-in per route; counters live in Redis so limits hold across instances.
+    global: false,
+    redis,
+    nameSpace: 'ratelimit:',
+    errorResponseBuilder: (_req, context) => ({
+      statusCode: 429,
+      code: 'RATE_LIMITED',
+      message: `Too many requests. Try again in ${Math.ceil(context.ttl / 1000)} s.`,
+    }),
   })
 
   app.addHook('onSend', async (req, reply) => {
@@ -108,18 +123,27 @@ export async function buildApp({ config, db }: AppDeps) {
 
   // Liveness plus dependency checks; 503 takes the instance out of rotation.
   app.get('/health', async (_req, reply) => {
-    const postgres = await db
-      .execute(sql`select 1`)
-      .then(() => 'up' as const)
-      .catch(() => 'down' as const)
-    const ok = postgres === 'up'
+    const [postgres, redisStatus] = await Promise.all([
+      db
+        .execute(sql`select 1`)
+        .then(() => 'up' as const)
+        .catch(() => 'down' as const),
+      redis
+        .ping()
+        .then(() => 'up' as const)
+        .catch(() => 'down' as const),
+    ])
+    const ok = postgres === 'up' && redisStatus === 'up'
     return reply.status(ok ? 200 : 503).send({
       status: ok ? 'ok' : 'degraded',
       instance: config.instanceId,
       uptimeMs: Date.now() - startedAt,
-      checks: { postgres },
+      checks: { postgres, redis: redisStatus },
     })
   })
+
+  await registerAuth(app, { config, db })
+  await app.register(authRoutes, { config, db, redis })
 
   return app
 }

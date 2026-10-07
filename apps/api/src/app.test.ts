@@ -1,16 +1,12 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 
-import { useTestDb } from '../test/db'
+import { useTestApp } from '../test/app'
 import { buildApp } from './app'
 import { loadConfig } from './config'
 import { createDb } from './db/client'
+import { createRedis } from './redis'
 
-const config = loadConfig({ NODE_ENV: 'test', LOG_LEVEL: 'silent' })
-const { db } = useTestDb()
-const app = await buildApp({ config, db })
-
-beforeAll(() => app.ready())
-afterAll(() => app.close())
+const { app, config } = await useTestApp()
 
 describe('app', () => {
   it('reports health with a request id', async () => {
@@ -19,19 +15,24 @@ describe('app', () => {
     expect(res.json()).toMatchObject({
       status: 'ok',
       instance: config.instanceId,
-      checks: { postgres: 'up' },
+      checks: { postgres: 'up', redis: 'up' },
     })
     expect(res.headers['x-request-id']).toMatch(/^[\w-]+$/)
   })
 
-  it('reports 503 when Postgres is unreachable', async () => {
-    const broken = createDb('postgres://nobody:wrong@127.0.0.1:1/none', { max: 1 })
-    const degraded = await buildApp({ config, db: broken.db })
+  it('reports 503 when its dependencies are unreachable', async () => {
+    const brokenDb = createDb('postgres://nobody:wrong@127.0.0.1:1/none', { max: 1 })
+    const brokenRedis = createRedis('redis://127.0.0.1:1')
+    const degraded = await buildApp({ config, db: brokenDb.db, redis: brokenRedis.redis })
     const res = await degraded.inject({ url: '/health' })
     expect(res.statusCode).toBe(503)
-    expect(res.json()).toMatchObject({ status: 'degraded', checks: { postgres: 'down' } })
+    expect(res.json()).toMatchObject({
+      status: 'degraded',
+      checks: { postgres: 'down', redis: 'down' },
+    })
     await degraded.close()
-    await broken.close()
+    await brokenDb.close()
+    await brokenRedis.close()
   })
 
   it('keeps a valid upstream request id', async () => {

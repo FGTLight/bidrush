@@ -46,6 +46,27 @@ export const users = pgTable(
   ],
 )
 
+/**
+ * Server-side record of each sign-in. The JWT in the cookie names its
+ * session, so signing out (or blocking a user) revokes it immediately
+ * instead of waiting for the token to expire.
+ */
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: uuid().primaryKey().defaultRandom(),
+    userId: uuid()
+      .notNull()
+      .references(() => users.id),
+    createdAt: createdAt(),
+    expiresAt: timestamp({ withTimezone: true }).notNull(),
+    revokedAt: timestamp({ withTimezone: true }),
+    ip: text(),
+    userAgent: text(),
+  },
+  (t) => [index('sessions_user_idx').on(t.userId)],
+)
+
 // ---------------------------------------------------------------- auctions
 
 export const auctionStatus = pgEnum('auction_status', ['scheduled', 'live', 'ended', 'cancelled'])
