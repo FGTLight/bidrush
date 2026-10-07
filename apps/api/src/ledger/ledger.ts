@@ -36,8 +36,9 @@ interface Posting {
 }
 
 /**
- * Writes one balanced transaction. Returns its id, or null when the
- * database says it already exists (an idempotent retry).
+ * Writes one balanced transaction, header and entries, in a single
+ * statement (one round trip). Returns its id, or null when the database
+ * says it already exists (an idempotent retry).
  */
 async function post(tx: Tx, posting: Posting): Promise<number | null> {
   const total = posting.entries.reduce((sum, e) => sum + e.amount, 0)
@@ -45,32 +46,40 @@ async function post(tx: Tx, posting: Posting): Promise<number | null> {
   if (posting.entries.some((e) => !Number.isInteger(e.amount) || e.amount === 0)) {
     throw new Error(`Invalid ${posting.kind} entry amount`)
   }
-
-  // ON CONFLICT DO NOTHING matches the partial unique indexes that make
-  // reserve/release (per bid) and settle (per auction) idempotent.
-  const [row] = await tx
-    .insert(ledgerTransactions)
-    .values({
-      kind: posting.kind,
-      auctionId: posting.auctionId ?? null,
-      bidId: posting.bidId ?? null,
-      memo: posting.memo ?? null,
-    })
-    .onConflictDoNothing()
-    .returning({ id: ledgerTransactions.id })
-  if (!row) return null
+  // Accounts are always locked in id order. Without this, a reserve
+  // (available, then reserved) and a release (reserved, then available) for
+  // the same user in two auctions could deadlock.
+  const entries = [...posting.entries].sort((x, y) => x.accountId - y.accountId)
+  const accountIds = `{${entries.map((e) => e.accountId).join(',')}}`
+  const amounts = `{${entries.map((e) => e.amount).join(',')}}`
 
   try {
-    await tx
-      .insert(ledgerEntries)
-      .values(posting.entries.map((e) => ({ transactionId: row.id, ...e })))
+    // ON CONFLICT DO NOTHING matches the partial unique indexes that make
+    // reserve/release (per bid) and settle (per auction) idempotent: on a
+    // duplicate the CTE returns no row and no entry is written.
+    const rows = await tx.execute<{ transaction_id: string }>(sql`
+      WITH t AS (
+        INSERT INTO ledger_transactions (kind, auction_id, bid_id, memo)
+        VALUES (${posting.kind}::ledger_tx_kind, ${posting.auctionId ?? null},
+                ${posting.bidId ?? null}, ${posting.memo ?? null})
+        ON CONFLICT DO NOTHING
+        RETURNING id
+      )
+      INSERT INTO ledger_entries (transaction_id, account_id, amount)
+      SELECT t.id, e.account_id, e.amount
+      FROM t, unnest(${accountIds}::int[], ${amounts}::bigint[])
+                WITH ORDINALITY AS e(account_id, amount, ord)
+      ORDER BY e.ord
+      RETURNING transaction_id
+    `)
+    const id = rows[0]?.transaction_id
+    return id === undefined ? null : Number(id)
   } catch (error) {
     if (isCheckViolation(error, 'ledger_accounts_balance_nonneg')) {
       throw new InsufficientCreditsError()
     }
     throw error
   }
-  return row.id
 }
 
 /** Creates the user's `available` and `reserved` accounts (at sign-up). */
@@ -94,12 +103,24 @@ function toUserAccounts(rows: { id: number; kind: string }[], userId: string): U
   return { available, reserved }
 }
 
+/**
+ * Account ids never change once opened, so they are cached: the bid hot
+ * path doesn't need a lookup per reservation.
+ */
+const userAccountIds = new Map<string, UserAccounts>()
+const MAX_CACHED_USERS = 50_000
+
 export async function userAccounts(ex: Executor, userId: string): Promise<UserAccounts> {
+  const cached = userAccountIds.get(userId)
+  if (cached) return cached
   const rows = await ex
     .select({ id: ledgerAccounts.id, kind: ledgerAccounts.kind })
     .from(ledgerAccounts)
     .where(eq(ledgerAccounts.userId, userId))
-  return toUserAccounts(rows, userId)
+  const accounts = toUserAccounts(rows, userId)
+  if (userAccountIds.size >= MAX_CACHED_USERS) userAccountIds.clear()
+  userAccountIds.set(userId, accounts)
+  return accounts
 }
 
 const systemAccountIds = new Map<string, number>()
@@ -116,9 +137,10 @@ async function systemAccount(ex: Executor, kind: 'issuance' | 'revenue'): Promis
   return row.id
 }
 
-/** For tests that recreate the system accounts. */
-export function clearSystemAccountCache() {
+/** For tests, which recreate every account between cases. */
+export function clearAccountCache() {
   systemAccountIds.clear()
+  userAccountIds.clear()
 }
 
 /** Gives demo credits to a user (sign-up bonus, top-ups). */

@@ -7,7 +7,7 @@ import { afterAll, expect } from 'vitest'
 import { createDb, type Executor } from '../src/db/client'
 import { pgError, type PgError } from '../src/db/errors'
 import { auctions, users } from '../src/db/schema'
-import { clearSystemAccountCache, grantCredits, openAccounts } from '../src/ledger/ledger'
+import { clearAccountCache, grantCredits, openAccounts } from '../src/ledger/ledger'
 import { TEST_DATABASE_URL } from './env'
 
 /** A pool for the current test file, closed automatically. */
@@ -25,7 +25,7 @@ export async function resetDb(db: Executor) {
     restart identity cascade
   `)
   await db.execute(sql`insert into ledger_accounts (kind) values ('issuance'), ('revenue')`)
-  clearSystemAccountCache()
+  clearAccountCache()
 }
 
 let userSeq = 0

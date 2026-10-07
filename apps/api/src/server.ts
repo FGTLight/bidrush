@@ -12,7 +12,7 @@ if (config.runMigrations) await runMigrations(config.databaseUrl)
 const database = createDb(config.databaseUrl)
 const redis = createRedis(config.redisUrl)
 await redis.connect()
-const app = await buildApp({ config, db: database.db, redis: redis.redis })
+const app = await buildApp({ config, db: database.db, redis: redis.redis, runScheduler: true })
 
 // Graceful shutdown: stop accepting work, let in-flight requests finish.
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {

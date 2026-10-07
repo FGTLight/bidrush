@@ -3,16 +3,21 @@ import { randomUUID } from 'node:crypto'
 import cors from '@fastify/cors'
 import helmet from '@fastify/helmet'
 import rateLimit from '@fastify/rate-limit'
-import type { ApiError } from '@bidrush/shared'
+import websocket from '@fastify/websocket'
+import { type ApiError, WS_LIMITS } from '@bidrush/shared'
 import { sql } from 'drizzle-orm'
 import Fastify, { type FastifyServerOptions } from 'fastify'
 import { ZodError } from 'zod'
 
+import { Scheduler } from './auctions/lifecycle'
+import { auctionRoutes } from './auctions/routes'
 import { registerAuth } from './auth/plugin'
 import { authRoutes } from './auth/routes'
 import type { Config } from './config'
 import type { Db } from './db/client'
 import { HttpError } from './errors'
+import { Broker } from './realtime/broker'
+import { ConnectionRegistry, realtimeRoutes } from './realtime/ws'
 import type { Redis } from './redis'
 
 export { HttpError }
@@ -40,13 +45,21 @@ export interface AppDeps {
   config: Config
   db: Db
   redis: Redis
+  /** Run the auction lifecycle loop (tests drive it by hand instead). */
+  runScheduler?: boolean
+}
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    realtime: { broker: Broker; registry: ConnectionRegistry; scheduler: Scheduler }
+  }
 }
 
 /**
  * Builds the Fastify app without listening, so tests can drive it with
  * `app.inject()`. `server.ts` adds the network side.
  */
-export async function buildApp({ config, db, redis }: AppDeps) {
+export async function buildApp({ config, db, redis, runScheduler = false }: AppDeps) {
   const startedAt = Date.now()
   const app = Fastify({
     logger: loggerOptions(config),
@@ -144,6 +157,24 @@ export async function buildApp({ config, db, redis }: AppDeps) {
 
   await registerAuth(app, { config, db })
   await app.register(authRoutes, { config, db, redis })
+  await app.register(auctionRoutes, { config, db })
+
+  // Realtime: WebSockets fed by Redis pub/sub, and the auction lifecycle.
+  const broker = new Broker(redis, app.log)
+  const registry = new ConnectionRegistry()
+  const scheduler = new Scheduler({ db, redis, broker, log: app.log })
+  app.decorate('realtime', { broker, registry, scheduler })
+  await app.register(websocket, { options: { maxPayload: WS_LIMITS.maxMessageBytes } })
+  await app.register(realtimeRoutes, { deps: { config, db, broker }, registry })
+
+  app.addHook('onReady', async () => {
+    await broker.start()
+    if (runScheduler) scheduler.start()
+  })
+  app.addHook('onClose', async () => {
+    await scheduler.stop()
+    await broker.stop()
+  })
 
   return app
 }

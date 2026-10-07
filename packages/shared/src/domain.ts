@@ -51,6 +51,11 @@ export const bidSchema = z.object({
   auctionId: z.uuid(),
   bidder: publicUserSchema,
   amount: credits,
+  /**
+   * 1, 2, 3… in acceptance order. Events from different API instances can
+   * arrive out of order; clients ignore any bid older than the last seen.
+   */
+  seq: z.number().int().min(1),
   createdAt: isoDate,
 })
 export type Bid = z.infer<typeof bidSchema>
