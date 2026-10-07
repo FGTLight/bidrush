@@ -9,7 +9,10 @@
 import { sql } from 'drizzle-orm'
 import {
   bigint,
+  boolean,
   check,
+  doublePrecision,
+  jsonb,
   index,
   integer,
   pgEnum,
@@ -263,4 +266,60 @@ export const ledgerEntries = pgTable(
     index('ledger_entries_tx_idx').on(t.transactionId),
     index('ledger_entries_account_idx').on(t.accountId, t.id.desc()),
   ],
+)
+
+// ---------------------------------------------------------------- anti-bot audit trail
+
+export const riskLevel = pgEnum('risk_level', ['allow', 'throttle', 'challenge', 'block'])
+
+export interface StoredSignal {
+  name: string
+  score: number
+  reason: string
+}
+
+/**
+ * Every non-trivial anti-bot decision, with the signals behind it, so a
+ * human can audit (and overturn) what the engine did.
+ */
+export const riskEvents = pgTable(
+  'risk_events',
+  {
+    id: bigint({ mode: 'number' }).primaryKey().generatedAlwaysAsIdentity(),
+    userId: uuid()
+      .notNull()
+      .references(() => users.id),
+    auctionId: uuid().references(() => auctions.id),
+    bidId: uuid(),
+    score: doublePrecision().notNull(),
+    level: riskLevel().notNull(),
+    signals: jsonb().$type<StoredSignal[]>().notNull(),
+    ip: text(),
+    fingerprint: text(),
+    /** Set when the engine (not an admin) blocked the account. */
+    autoBlocked: boolean().notNull().default(false),
+    createdAt: createdAt(),
+  },
+  (t) => [
+    check('risk_events_score_range', sql`${t.score} >= 0 and ${t.score} <= 1`),
+    index('risk_events_user_created_idx').on(t.userId, t.createdAt.desc()),
+    index('risk_events_created_idx').on(t.createdAt.desc()),
+  ],
+)
+
+/** Latest risk per user: what the admin's flagged-users table lists. */
+export const userRisk = pgTable(
+  'user_risk',
+  {
+    userId: uuid()
+      .primaryKey()
+      .references(() => users.id),
+    score: doublePrecision().notNull(),
+    level: riskLevel().notNull(),
+    topReasons: text().array().notNull(),
+    lastEventAt: timestamp({ withTimezone: true }).notNull(),
+    /** An admin reviewed and cleared the user; hidden until flagged again. */
+    clearedAt: timestamp({ withTimezone: true }),
+  },
+  (t) => [index('user_risk_score_idx').on(t.score.desc())],
 )

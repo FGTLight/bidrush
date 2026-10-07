@@ -18,6 +18,7 @@ import type { PublicUser } from '@bidrush/shared'
 import { eq, sql } from 'drizzle-orm'
 import type { FastifyBaseLogger } from 'fastify'
 
+import type { AntiBotEngine } from '../antibot/engine'
 import type { Db } from '../db/client'
 import { auctions, users } from '../db/schema'
 import { getWallet, settleAuction } from '../ledger/ledger'
@@ -101,6 +102,7 @@ interface SchedulerDeps {
   db: Db
   redis: Redis
   broker: Broker
+  antibot?: AntiBotEngine
   log: FastifyBaseLogger
   /** How often to look for due auctions. */
   tickMs?: number
@@ -152,6 +154,7 @@ export class Scheduler {
       if (!auction) continue
       const message = { type: 'auction_started', auction } as const
       await Promise.all([
+        this.deps.antibot?.noteEndsAt(id, new Date(auction.endsAt)),
         broker.publish(auctionChannel(id), message),
         broker.publish(LOBBY_CHANNEL, message),
       ])

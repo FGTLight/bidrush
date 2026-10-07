@@ -11,7 +11,8 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --env-file-if-exists=../../.env src/db/migrate-cli.ts",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "seed": "tsx --env-file-if-exists=../../.env src/seed.ts"
   },
   "dependencies": {
     "@bidrush/shared": "workspace:*",

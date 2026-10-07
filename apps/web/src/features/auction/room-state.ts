@@ -24,6 +24,8 @@ export interface PendingBid {
   bidId: string
   amount: number
   sentAt: number
+  /** The server asked for proof-of-work; the client is solving it. */
+  verifying?: boolean
 }
 
 export interface RoomState {
@@ -92,6 +94,13 @@ function applyBidPlaced(state: RoomState, m: BidPlaced, at: number): RoomState {
 
 function applyAck(state: RoomState, m: BidAck, at: number): RoomState {
   if (!state.pending.some((p) => p.bidId === m.bidId)) return state
+  if (m.status === 'rejected' && m.code === 'CHALLENGE_REQUIRED') {
+    // Not final: the client solves the challenge and resends this bid.
+    return {
+      ...state,
+      pending: state.pending.map((p) => (p.bidId === m.bidId ? { ...p, verifying: true } : p)),
+    }
+  }
   const pending = state.pending.filter((p) => p.bidId !== m.bidId)
   if (m.status === 'accepted') return { ...state, pending, rejection: null }
   return { ...state, pending, rejection: { code: m.code, message: m.message, at } }

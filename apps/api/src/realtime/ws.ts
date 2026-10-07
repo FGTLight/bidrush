@@ -12,6 +12,7 @@ import {
   type BidMessage,
   bidErrorMessages,
   type BrowserSignals,
+  type ClientMessage,
   clientMessageSchema,
   type ServerMessage,
   WS_LIMITS,
@@ -20,6 +21,7 @@ import {
 import type { FastifyBaseLogger, FastifyInstance, FastifyRequest } from 'fastify'
 import type { WebSocket } from 'ws'
 
+import type { AntiBotEngine, BidAttempt } from '../antibot/engine'
 import type { AuthContext } from '../auth/sessions'
 import { isAllowedOrigin } from '../auth/plugin'
 import { getAuction, recentBids } from '../auctions/views'
@@ -37,7 +39,10 @@ export interface RealtimeDeps {
   config: Config
   db: Db
   broker: Broker
+  antibot: AntiBotEngine
 }
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /** Live connections of this instance (metrics, heartbeat, shutdown). */
 export class ConnectionRegistry {
@@ -84,22 +89,49 @@ class Connection {
     }
   }
 
-  enqueue(raw: string) {
+  /**
+   * Called synchronously for every frame. Validation, rate limiting, pings
+   * and the hello are handled on arrival, so they are never stuck behind a
+   * slow (e.g. throttled) bid; only stateful work goes through the queue.
+   */
+  receive(raw: string) {
+    const message = this.parse(raw)
+    if (!message) return
+
+    if (message.type === 'ping') {
+      // Answered immediately: queueing would distort the clock estimate.
+      this.send({ type: 'pong', clientTime: message.clientTime, serverTime: Date.now() })
+      return
+    }
+    // The per-connection budget counts arrivals, not processed messages.
+    const waitMs = this.bucket.take()
+    if (waitMs > 0) {
+      if (message.type === 'bid') this.rejectBid(message.bidId, 'RATE_LIMITED', waitMs)
+      else
+        this.send({ type: 'error', code: 'RATE_LIMITED', message: bidErrorMessages.RATE_LIMITED })
+      return
+    }
+    if (message.type === 'hello') {
+      this.signals = message.signals
+      return
+    }
+
+    const receivedAt = Date.now()
     this.queue = this.queue
-      .then(() => this.handle(raw))
+      .then(() => this.handle(message, receivedAt))
       .catch((err: unknown) => {
         this.log.error({ err }, 'ws message failed')
         this.send({ type: 'error', code: 'INTERNAL', message: bidErrorMessages.INTERNAL })
       })
   }
 
-  private async handle(raw: string) {
+  private parse(raw: string): ClientMessage | null {
     let json: unknown
     try {
       json = JSON.parse(raw)
     } catch {
       this.send({ type: 'error', code: 'VALIDATION', message: 'Messages must be JSON.' })
-      return
+      return null
     }
     const parsed = clientMessageSchema.safeParse(json)
     if (!parsed.success) {
@@ -110,25 +142,16 @@ class Connection {
       } else {
         this.send({ type: 'error', code: 'VALIDATION', message: 'Unknown or malformed message.' })
       }
-      return
+      return null
     }
+    return parsed.data
+  }
 
-    const message = parsed.data
-    const waitMs = message.type === 'ping' ? 0 : this.bucket.take()
-    if (waitMs > 0) {
-      if (message.type === 'bid') this.rejectBid(message.bidId, 'RATE_LIMITED', waitMs)
-      else
-        this.send({ type: 'error', code: 'RATE_LIMITED', message: bidErrorMessages.RATE_LIMITED })
-      return
-    }
-
+  private async handle(
+    message: Exclude<ClientMessage, { type: 'ping' | 'hello' }>,
+    receivedAt: number,
+  ) {
     switch (message.type) {
-      case 'hello':
-        this.signals = message.signals
-        return
-      case 'ping':
-        this.send({ type: 'pong', clientTime: message.clientTime, serverTime: Date.now() })
-        return
       case 'subscribe':
         return this.subscribe(message.auctionId)
       case 'unsubscribe':
@@ -136,7 +159,7 @@ class Connection {
         this.subscriptions.delete(message.auctionId)
         return
       case 'bid':
-        return this.bid(message)
+        return this.bid(message, receivedAt)
     }
   }
 
@@ -186,13 +209,19 @@ class Connection {
     })
   }
 
-  private async bid(message: BidMessage) {
+  private async bid(message: BidMessage, receivedAt: number) {
     if (!this.auth) {
       this.rejectBid(message.bidId, 'UNAUTHORIZED')
       return
     }
-    const { db, broker } = this.deps
+    const { db, broker, antibot } = this.deps
     const startedAt = performance.now()
+
+    if (antibot.enabled) {
+      const verdict = await this.screen(message, this.auth, receivedAt)
+      if (verdict === 'stop') return
+    }
+
     const result = await placeBid(db, {
       bidId: message.bidId,
       auctionId: message.auctionId,
@@ -222,6 +251,11 @@ class Connection {
 
     const { bid, auction, outbid } = result
     await Promise.all([
+      // Anti-bot bookkeeping: the outbid user's reaction stopwatch, and the
+      // (possibly extended) end time for the closing-offset signal.
+      outbid && antibot.noteOutbid(outbid.userId, bid.auctionId),
+      antibot.noteAccepted(this.auth.userId, bid.auctionId, receivedAt),
+      antibot.noteEndsAt(bid.auctionId, auction.endsAt),
       broker.publish(auctionChannel(bid.auctionId), {
         type: 'bid_placed',
         bid: {
@@ -251,6 +285,61 @@ class Connection {
       { bidId: bid.id, auctionId: bid.auctionId, ms: performance.now() - startedAt },
       'bid accepted',
     )
+  }
+
+  /**
+   * Runs the anti-bot engine on a bid. Returns 'stop' when the bid was
+   * answered (refused or challenged) and must not reach the bid engine.
+   */
+  private async screen(
+    message: BidMessage,
+    auth: AuthContext,
+    receivedAt: number,
+  ): Promise<'go' | 'stop'> {
+    const { antibot } = this.deps
+    const enforce = antibot.config.mode === 'enforce'
+
+    if (message.challenge && !(await antibot.verifyChallenge(auth.userId, message.challenge))) {
+      if (enforce) {
+        this.send(await antibot.issueChallenge(auth.userId))
+        this.rejectBid(message.bidId, 'CHALLENGE_REQUIRED')
+        return 'stop'
+      }
+    }
+
+    const attempt: BidAttempt = {
+      userId: auth.userId,
+      auctionId: message.auctionId,
+      bidId: message.bidId,
+      ip: this.ip,
+      receivedAt,
+      interaction: message.interaction,
+      browser: this.signals,
+    }
+    const evaluation = await antibot.evaluate(attempt)
+    // Logged and stored off the hot path; never silently.
+    antibot.recordInBackground(attempt, evaluation)
+    if (!enforce) return 'go' // monitor mode: observe only
+
+    if (evaluation.rateLimited) {
+      this.rejectBid(message.bidId, 'RATE_LIMITED', 1_000)
+      return 'stop'
+    }
+    switch (evaluation.level) {
+      case 'block':
+        this.rejectBid(message.bidId, 'SUSPECTED_BOT')
+        return 'stop'
+      case 'challenge':
+        this.send(await antibot.issueChallenge(auth.userId))
+        this.rejectBid(message.bidId, 'CHALLENGE_REQUIRED')
+        return 'stop'
+      case 'throttle':
+        // A late bid loses races to humans; that's the point.
+        await sleep(evaluation.delayMs)
+        return 'go'
+      case 'allow':
+        return 'go'
+    }
   }
 
   async close() {
@@ -289,7 +378,7 @@ export async function realtimeRoutes(
         connection.send({ type: 'error', code: 'VALIDATION', message: 'Text frames only.' })
         return
       }
-      connection.enqueue(frameToString(data))
+      connection.receive(frameToString(data))
     })
     socket.on('pong', () => {
       connection.alive = true

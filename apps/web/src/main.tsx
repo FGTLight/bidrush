@@ -7,6 +7,7 @@ import { BrowserRouter } from 'react-router'
 
 import { App } from './App'
 import { installInteractionTracking } from './lib/interaction'
+import { warmUpSignals } from './lib/signals'
 import { applyTheme } from './lib/theme'
 import { RealtimeProvider } from './realtime/RealtimeProvider'
 
@@ -15,6 +16,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   applyTheme()
 })
 installInteractionTracking()
+void warmUpSignals()
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 30_000, refetchOnWindowFocus: false, retry: 1 } },

@@ -20,7 +20,7 @@ export function useTestDb(max = 10) {
 /** Empties every table and recreates the system ledger accounts. */
 export async function resetDb(db: Executor) {
   await db.execute(sql`
-    truncate users, sessions, auctions, bids, auction_participants,
+    truncate users, sessions, auctions, bids, auction_participants, risk_events, user_risk,
       ledger_entries, ledger_transactions, ledger_accounts
     restart identity cascade
   `)

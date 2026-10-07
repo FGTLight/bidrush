@@ -9,6 +9,8 @@ import { sql } from 'drizzle-orm'
 import Fastify, { type FastifyServerOptions } from 'fastify'
 import { ZodError } from 'zod'
 
+import { AntiBotEngine } from './antibot/engine'
+import { antibotRoutes } from './antibot/routes'
 import { Scheduler } from './auctions/lifecycle'
 import { auctionRoutes } from './auctions/routes'
 import { registerAuth } from './auth/plugin'
@@ -52,7 +54,12 @@ export interface AppDeps {
 
 declare module 'fastify' {
   interface FastifyInstance {
-    realtime: { broker: Broker; registry: ConnectionRegistry; scheduler: Scheduler }
+    realtime: {
+      broker: Broker
+      registry: ConnectionRegistry
+      scheduler: Scheduler
+      antibot: AntiBotEngine
+    }
   }
 }
 
@@ -164,10 +171,12 @@ export async function buildApp({ config, db, redis, runScheduler = false }: AppD
   // Realtime: WebSockets fed by Redis pub/sub, and the auction lifecycle.
   const broker = new Broker(redis, app.log)
   const registry = new ConnectionRegistry()
-  const scheduler = new Scheduler({ db, redis, broker, log: app.log })
-  app.decorate('realtime', { broker, registry, scheduler })
+  const antibot = new AntiBotEngine(redis, db, config.antibot, app.log)
+  const scheduler = new Scheduler({ db, redis, broker, antibot, log: app.log })
+  app.decorate('realtime', { broker, registry, scheduler, antibot })
   await app.register(websocket, { options: { maxPayload: WS_LIMITS.maxMessageBytes } })
-  await app.register(realtimeRoutes, { deps: { config, db, broker }, registry })
+  await app.register(realtimeRoutes, { deps: { config, db, broker, antibot }, registry })
+  await app.register(antibotRoutes, { db, antibot })
 
   app.addHook('onReady', async () => {
     await broker.start()
@@ -175,6 +184,7 @@ export async function buildApp({ config, db, redis, runScheduler = false }: AppD
   })
   app.addHook('onClose', async () => {
     await scheduler.stop()
+    await antibot.drain()
     await broker.stop()
   })
 

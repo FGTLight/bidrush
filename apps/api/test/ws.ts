@@ -11,11 +11,21 @@ import { testConfig, WEB_ORIGIN } from './app'
 import { TEST_REDIS_URL } from './env'
 
 /** Starts an instance sharing the test database and Redis. */
-export async function startInstance(db: Db, instanceId: string) {
+export async function startInstance(
+  db: Db,
+  instanceId: string,
+  overrides: Record<string, string> = {},
+) {
   const redis = createRedis(TEST_REDIS_URL)
   await redis.connect()
   // Many sign-ups from 127.0.0.1 in one file: lift the per-IP auth limit.
-  const config = testConfig({ INSTANCE_ID: instanceId, AUTH_RATE_LIMIT_PER_MINUTE: '10000' })
+  const config = testConfig({
+    INSTANCE_ID: instanceId,
+    AUTH_RATE_LIMIT_PER_MINUTE: '10000',
+    // Transport tests opt out; the anti-bot tests opt in.
+    ANTIBOT_MODE: 'off',
+    ...overrides,
+  })
   const app = await buildApp({ config, db, redis: redis.redis })
   await app.listen({ host: '127.0.0.1', port: 0 })
   const address = app.server.address()
@@ -77,15 +87,24 @@ export class TestSocket {
     this.ws.send(JSON.stringify(message))
   }
 
-  /** Resolves with the first message (already received or future) matching. */
+  /** Position in the message log; pass to `next` to ignore older messages. */
+  mark() {
+    return this.messages.length
+  }
+
+  /**
+   * Resolves with the first matching message, already received (from
+   * position `since`) or future.
+   */
   next<T extends ServerMessage['type']>(
     type: T,
     where: (m: Extract<ServerMessage, { type: T }>) => boolean = () => true,
     timeoutMs = 5_000,
+    since = 0,
   ): Promise<Extract<ServerMessage, { type: T }>> {
     const predicate = (m: ServerMessage) =>
       m.type === type && where(m as Extract<ServerMessage, { type: T }>)
-    const seen = this.messages.find(predicate)
+    const seen = this.messages.slice(since).find(predicate)
     if (seen) return Promise.resolve(seen as Extract<ServerMessage, { type: T }>)
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {

@@ -52,6 +52,7 @@ function setup() {
     },
     clearTimer: () => undefined,
     signals: () => ({ webdriver: false }),
+    solve: () => Promise.resolve('nonce-42'),
   })
   const runTimers = (maxMs: number) => {
     for (const t of timers.splice(0).filter((x) => x.ms <= maxMs)) t.fn()
@@ -163,6 +164,59 @@ describe('RealtimeClient', () => {
       serverTime: 1_000 + 20 + 5_000,
     })
     expect(client.offsetMs).toBe(5_000)
+  })
+
+  it('solves a challenge and resends the same bid with the answer', async () => {
+    const { client, socket } = setup()
+    client.connect()
+    socket().serverOpen()
+    const bid = {
+      type: 'bid' as const,
+      bidId,
+      auctionId,
+      amount: 150,
+      interaction: { trustedEvents: 0, honeypot: '', reactionMs: null },
+    }
+    client.sendBid(bid)
+    socket().serverSend({ type: 'challenge', id: 'ch-1', prefix: 'abc', difficulty: 3 })
+    socket().serverSend({
+      type: 'bid_ack',
+      status: 'rejected',
+      bidId,
+      code: 'CHALLENGE_REQUIRED',
+      message: 'Prove it',
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(socket().sent.at(-1)).toEqual({ ...bid, challenge: { id: 'ch-1', nonce: 'nonce-42' } })
+  })
+
+  it('gives up after two challenges for the same bid', async () => {
+    const { client, socket } = setup()
+    client.connect()
+    socket().serverOpen()
+    const bid = {
+      type: 'bid' as const,
+      bidId,
+      auctionId,
+      amount: 150,
+      interaction: { trustedEvents: 0, honeypot: '', reactionMs: null },
+    }
+    client.sendBid(bid)
+    for (let i = 0; i < 3; i++) {
+      socket().serverSend({ type: 'challenge', id: `ch-${i}`, prefix: 'abc', difficulty: 3 })
+      socket().serverSend({
+        type: 'bid_ack',
+        status: 'rejected',
+        bidId,
+        code: 'CHALLENGE_REQUIRED',
+        message: 'Prove it',
+      })
+      await Promise.resolve()
+      await Promise.resolve()
+    }
+    const resends = socket().sent.filter((m) => (m as { challenge?: unknown }).challenge)
+    expect(resends).toHaveLength(2)
   })
 
   it('ignores messages that fail validation', () => {

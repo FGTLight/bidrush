@@ -106,6 +106,25 @@ describe('roomReducer', () => {
     expect(state.rejection).toMatchObject({ code: 'OUTBID' })
   })
 
+  it('keeps a challenged bid pending while the proof-of-work is solved', () => {
+    let state = reduce([snapshot()])
+    state = roomReducer(state, { type: 'bid_sent', bid: { bidId: 'b1', amount: 110, sentAt: 1 } })
+    state = reduce(
+      [
+        {
+          type: 'bid_ack',
+          status: 'rejected',
+          bidId: 'b1',
+          code: 'CHALLENGE_REQUIRED',
+          message: 'Prove it',
+        },
+      ],
+      state,
+    )
+    expect(state.pending).toEqual([{ bidId: 'b1', amount: 110, sentAt: 1, verifying: true }])
+    expect(state.rejection).toBeNull()
+  })
+
   it('ends the auction with its winner', () => {
     const state = reduce([
       snapshot(),

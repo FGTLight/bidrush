@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto'
 import { AUCTION_DEFAULTS } from '@bidrush/shared'
 import { z } from 'zod'
 
+import { loadAntiBotConfig } from './antibot/config'
+
 const DEV_JWT_SECRET = 'dev-only-secret-change-me-dev-only-secret'
 
 const bool = z.enum(['true', 'false', '1', '0']).transform((v) => v === 'true' || v === '1')
@@ -102,6 +104,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env) {
       signupCredits: e.SIGNUP_CREDITS,
       rateLimitPerMinute: e.AUTH_RATE_LIMIT_PER_MINUTE,
     },
+    antibot: loadAntiBotConfig(env),
     auction: {
       durationMs: e.AUCTION_DURATION_MS,
       softCloseWindowMs: e.SOFT_CLOSE_WINDOW_MS,

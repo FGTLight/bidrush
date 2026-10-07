@@ -17,6 +17,11 @@ x-api-env: &api-env
   CORS_ORIGINS: http://localhost:8080
   # Browsers accept Secure cookies on http://localhost.
   COOKIE_SECURE: 'true'
+  # Local demo: room for the bot simulator's ~15 accounts from one IP
+  # (production default: 10 per minute).
+  AUTH_RATE_LIMIT_PER_MINUTE: '30'
+  # The simulator runs every client from one IP; see the README.
+  ANTIBOT_IP_PER_MINUTE: ${ANTIBOT_IP_PER_MINUTE:-300}
 
 x-api: &api
   build:

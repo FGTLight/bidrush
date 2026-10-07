@@ -29,7 +29,9 @@ export function BidFeed({
           <span className="font-medium">You</span>
           <span className="flex items-center gap-2 font-mono tabular-nums">
             {formatCredits(p.amount)}
-            <span className="text-xs text-ink-muted">sending…</span>
+            <span className="text-xs text-ink-muted">
+              {p.verifying ? 'verifying you’re human…' : 'sending…'}
+            </span>
           </span>
         </li>
       ))}

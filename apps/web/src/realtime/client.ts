@@ -8,7 +8,10 @@
  *   the only source of truth for time; this offset is only for display.
  * - Bids sent while offline wait in an outbox and go out on reconnect with
  *   the same bidId, so the server's idempotency makes the retry safe.
+ * - When the anti-bot engine asks for proof-of-work, solves it and resends
+ *   the same bid with the answer.
  */
+import { solveChallenge } from '@/lib/pow'
 import {
   type BidMessage,
   type BrowserSignals,
@@ -31,7 +34,12 @@ export interface RealtimeOptions {
   now?: () => number
   setTimer?: (fn: () => void, ms: number) => unknown
   clearTimer?: (handle: unknown) => void
+  /** Proof-of-work solver (tests inject a fake). */
+  solve?: (prefix: string, difficulty: number) => Promise<string>
 }
+
+/** Challenges solved per bid before giving up (never loop forever). */
+const MAX_CHALLENGE_ATTEMPTS = 2
 
 const MAX_BACKOFF_MS = 10_000
 const CLOCK_SAMPLES = 8
@@ -59,6 +67,8 @@ export class RealtimeClient {
   private readonly subscriptions = new Map<string, number>()
   private readonly outbox = new Map<string, BidMessage>()
   private readonly pings = new Map<number, number>()
+  private challenge: { id: string; prefix: string; difficulty: number } | null = null
+  private readonly challengeAttempts = new Map<string, number>()
   private samples: ClockSample[] = []
   private readonly WS: typeof WebSocket
   private readonly random: () => number
@@ -204,11 +214,40 @@ export class RealtimeClient {
         }
         return // internal
       }
+      case 'challenge':
+        this.challenge = { id: message.id, prefix: message.prefix, difficulty: message.difficulty }
+        break
       case 'bid_ack':
+        if (message.status === 'rejected' && message.code === 'CHALLENGE_REQUIRED') {
+          if (this.answerChallenge(message.bidId)) break
+        }
         this.outbox.delete(message.bidId)
+        this.challengeAttempts.delete(message.bidId)
         break
     }
     for (const listener of this.listeners) listener(message)
+  }
+
+  /** Solves the pending challenge and resends the bid; false if it can't. */
+  private answerChallenge(bidId: string): boolean {
+    const bid = this.outbox.get(bidId)
+    const challenge = this.challenge
+    const attempts = this.challengeAttempts.get(bidId) ?? 0
+    if (!bid || !challenge || attempts >= MAX_CHALLENGE_ATTEMPTS) return false
+    this.challengeAttempts.set(bidId, attempts + 1)
+    this.challenge = null
+    const solve = this.options.solve ?? ((p, d) => solveChallenge(p, d))
+    solve(challenge.prefix, challenge.difficulty).then(
+      (nonce) => {
+        const answered: BidMessage = { ...bid, challenge: { id: challenge.id, nonce } }
+        this.outbox.set(bidId, answered)
+        this.send(answered)
+      },
+      () => {
+        this.outbox.delete(bidId)
+      },
+    )
+    return true
   }
 
   /** A few pings now, then one every 30 s. */
