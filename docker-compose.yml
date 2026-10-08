@@ -92,6 +92,8 @@ services:
       dockerfile: apps/web/Dockerfile
     ports:
       - '8080:80'
+    environment:
+      API_UPSTREAMS: api-1:3000 api-2:3000
     depends_on:
       api-1:
         condition: service_healthy

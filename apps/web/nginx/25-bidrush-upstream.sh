@@ -10,7 +10,7 @@
 set -eu
 
 if [ -z "${API_UPSTREAMS:-}" ]; then
-  echo "25-bidrush-upstream: API_UPSTREAMS is not set" >&2
+  echo "25-bidrush-upstream: set API_UPSTREAMS (e.g. api.railway.internal:3000)" >&2
   exit 1
 fi
 
