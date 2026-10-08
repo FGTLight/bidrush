@@ -1,5 +1,7 @@
 # BidRush
 
+**Live demo: https://bidrush-production.up.railway.app**
+
 **Real-time, 1-minute express auctions.** Bids travel over WebSockets, are decided by a single atomic Postgres statement in milliseconds, fan out to every API instance through Redis pub/sub, and pass through an anti-bot engine that scores each one before it touches the money.
 
 It's a portfolio project about the hard backend parts: race conditions, atomic transactions, concurrency, exactly-once processing across instances, and abuse detection. Everything below is backed by tests that run against real Postgres and Redis.
