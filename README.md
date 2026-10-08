@@ -287,20 +287,24 @@ All API variables are validated at startup with zod (`apps/api/src/config.ts`, `
 - **Rate limits:** per IP on credential routes (Redis, cluster-wide), plus a per-email lockout after repeated failures.
 - **Headers and logs:** helmet; CORS allowlist; structured pino logs with request ids, and session cookies and CSRF tokens redacted.
 
-## Deployment notes
+## Deployment
 
-- **Web on Vercel:**
-  - build with `pnpm --filter @bidrush/web build`, output `apps/web/dist`, with an SPA rewrite to `index.html`;
-  - set `VITE_API_URL=https://api.your-domain` (and `VITE_WS_URL` if needed).
-- **API + Postgres + Redis on Railway, Render or Fly:**
-  - build from `apps/api/Dockerfile`;
-  - use managed Postgres **18** and Redis, and run 2+ instances: no sticky sessions needed;
-  - migrations run at startup under an advisory lock.
-- **Cross-site cookies:**
-  - with the web app on `*.vercel.app` and the API elsewhere, set `COOKIE_SECURE=true`, `COOKIE_CROSS_SITE=true` and `CORS_ORIGINS=https://your-app.vercel.app`;
-  - better, serve both under one domain (`app.example.com` and `api.example.com`), so cookies stay first-party and browsers' third-party cookie blocking doesn't apply.
-- **Behind a load balancer:** set `TRUST_PROXY_HOPS` to the number of proxies, so rate limits see real client IPs.
-- **Before launch:** start with `ANTIBOT_MODE=monitor`, review the flagged users, tune the thresholds, then switch to `enforce`.
+The same images as Docker Compose, on [Railway](https://railway.com): **Postgres 18**, **Redis**, `api` and `web` (nginx) in one project, talking over the private network.
+
+The web app and the API must share an origin, so nginx serves the SPA and proxies `/api` and `/ws`. That keeps the session cookie first-party and lets WebSockets carry it. Splitting the SPA onto Vercel doesn't fit: Vercel can't proxy WebSockets, and a cross-site cookie is blocked by browsers' third-party cookie rules.
+
+| Service  | Source                                                   | Variables                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Postgres | Postgres **18** template                                 | (check with `select version()`)                                                                                                                                                                                                                                                                                                                                                            |
+| Redis    | Redis template                                           |                                                                                                                                                                                                                                                                                                                                                                                            |
+| `api`    | this repo, `RAILWAY_DOCKERFILE_PATH=apps/api/Dockerfile` | `DATABASE_URL`, `REDIS_URL` (references to the services above), `JWT_SECRET` (32+ random characters), `ADMIN_PASSWORD` (private, 12+ characters), `HOST=::`, `PORT=3000`, `CORS_ORIGINS=https://<web domain>`, `COOKIE_SECURE=true`, `TRUST_PROXY_HOPS=2`, `AUTOPILOT=true`, `ANTIBOT_MODE=enforce`. Pre-deploy command `node dist/seed.js`; healthcheck path `/health`; no public domain. |
+| `web`    | this repo, `RAILWAY_DOCKERFILE_PATH=apps/web/Dockerfile` | `API_UPSTREAMS=api.railway.internal:3000`. Generate a public domain: Railway sets `PORT` and nginx listens on it.                                                                                                                                                                                                                                                                          |
+
+- **Migrations** run at startup (and in the seed) under an advisory lock, so several replicas can start at once.
+- **Seed:** `dist/seed.js` refuses to run in production with the demo admin password.
+- **Scaling:** add `api` replicas freely. They share the private DNS name, nginx re-resolves it every 5 s, and no sticky sessions are needed.
+- **`TRUST_PROXY_HOPS`:** set it to the number of proxies in front of the API (Railway's edge plus nginx = 2), so rate limits and anti-bot see real client IPs.
+- **Before a real launch:** start with `ANTIBOT_MODE=monitor`, review the flagged users, tune the thresholds, then switch to `enforce`.
 
 ## Tech stack
 

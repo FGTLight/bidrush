@@ -17,9 +17,19 @@ import { runMigrations } from './db/migrate'
 import { users } from './db/schema'
 import { grantCredits, openAccounts } from './ledger/ledger'
 
+const DEFAULT_ADMIN_PASSWORD = 'bidrush-admin-demo'
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? 'admin@bidrush.dev'
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? 'bidrush-admin-demo'
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? DEFAULT_ADMIN_PASSWORD
 const DEMO_PASSWORD = 'bidrush-demo'
+
+// The demo admin password is public (it's in the README): never on a real deployment.
+if (
+  process.env.NODE_ENV === 'production' &&
+  (ADMIN_PASSWORD === DEFAULT_ADMIN_PASSWORD || ADMIN_PASSWORD.length < 12)
+) {
+  console.error('In production, set ADMIN_PASSWORD to a private value of 12+ characters.')
+  process.exit(1)
+}
 
 const accounts = [
   {
@@ -70,6 +80,7 @@ for (const account of accounts) {
   console.log(`created  ${account.email}`)
 }
 
-console.log(`\nadmin: ${ADMIN_EMAIL} / ${ADMIN_PASSWORD}`)
+const shownPassword = process.env.NODE_ENV === 'production' ? '(ADMIN_PASSWORD)' : ADMIN_PASSWORD
+console.log(`\nadmin: ${ADMIN_EMAIL} / ${shownPassword}`)
 console.log(`demo bidders: alice@, bob@, carol@bidrush.dev / ${DEMO_PASSWORD}`)
 await close()

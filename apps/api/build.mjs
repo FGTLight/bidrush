@@ -1,10 +1,11 @@
-// Bundles the API into dist/server.js. npm dependencies stay external
-// (installed in the image); the workspace's TypeScript package is inlined.
+// Bundles the API into dist/server.js (and dist/seed.js, run as a pre-deploy
+// step in production). npm dependencies stay external (installed in the
+// image); the workspace's TypeScript package is inlined.
 import { build } from 'esbuild'
 
 await build({
-  entryPoints: ['src/server.ts'],
-  outfile: 'dist/server.js',
+  entryPoints: ['src/server.ts', 'src/seed.ts'],
+  outdir: 'dist',
   bundle: true,
   platform: 'node',
   format: 'esm',
@@ -21,4 +22,4 @@ await build({
     },
   ],
 })
-console.log('dist/server.js built')
+console.log('dist/server.js and dist/seed.js built')
